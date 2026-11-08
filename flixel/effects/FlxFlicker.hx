@@ -1,214 +1,221 @@
 package flixel.effects;
 
+import flixel.FlxG;
 import flixel.FlxObject;
 import flixel.util.FlxDestroyUtil.IFlxDestroyable;
 import flixel.util.FlxPool;
 import flixel.util.FlxTimer;
 
-/**
- * The retro flickering effect with callbacks.
- * You can use this as a mixin in any FlxObject subclass or by calling the static functions.
- * @author pixelomatic
- */
 class FlxFlicker implements IFlxDestroyable
 {
 	static var _pool:FlxPool<FlxFlicker> = new FlxPool<FlxFlicker>(FlxFlicker.new);
-
-	/**
-	 * Internal map for looking up which objects are currently flickering and getting their flicker data.
-	 */
 	static var _boundObjects:Map<FlxObject, FlxFlicker> = new Map<FlxObject, FlxFlicker>();
 
-	/**
-	 * A simple flicker effect for sprites using a `FlxTimer` to toggle visibility.
-	 *
-	 * @param   Object               The object.
-	 * @param   Duration             How long to flicker for (in seconds). `0` means "forever".
-	 * @param   Interval             In what interval to toggle visibility. Set to `FlxG.elapsed` if `<= 0`!
-	 * @param   EndVisibility        Force the visible value when the flicker completes,
-	 *                               useful with fast repetitive use.
-	 * @param   ForceRestart         Force the flicker to restart from beginning,
-	 *                               discarding the flickering effect already in progress if there is one.
-	 * @param   CompletionCallback   An optional callback that will be triggered when a flickering has finished.
-	 * @param   ProgressCallback     An optional callback that will be triggered when visibility is toggled.
-	 * @return The `FlxFlicker` object. `FlxFlicker`s are pooled internally, so beware of storing references.
-	 */
 	public static function flicker(Object:FlxObject, Duration:Float = 1, Interval:Float = 0.04, EndVisibility:Bool = true, ForceRestart:Bool = true,
 			?CompletionCallback:FlxFlicker->Void, ?ProgressCallback:FlxFlicker->Void):FlxFlicker
 	{
-		if (isFlickering(Object))
+		if (Object == null)
+			return null;
+
+		var existing = _boundObjects.get(Object);
+		if (existing != null)
 		{
-			if (ForceRestart)
-			{
-				stopFlickering(Object);
-			}
-			else
-			{
-				// Ignore this call if object is already flickering.
-				return _boundObjects[Object];
-			}
+			if (!ForceRestart)
+				return existing;
+			existing.stop();
 		}
 
-		if (Interval <= 0)
-		{
-			Interval = FlxG.elapsed;
-		}
-
-		var flicker:FlxFlicker = _pool.get();
-		flicker.start(Object, Duration, Interval, EndVisibility, CompletionCallback, ProgressCallback);
-		return _boundObjects[Object] = flicker;
+		var effect = _pool.get();
+		_boundObjects.set(Object, effect);
+		effect.start(Object, Duration, Interval, EndVisibility, CompletionCallback, ProgressCallback);
+		return effect;
 	}
 
-	/**
-	 * Returns whether the object is flickering or not.
-	 *
-	 * @param   Object The object to test.
-	 */
 	public static function isFlickering(Object:FlxObject):Bool
 	{
-		return _boundObjects.exists(Object);
+		return Object != null && _boundObjects.exists(Object);
 	}
 
-	/**
-	 * Stops flickering of the object. Also it will make the object visible.
-	 *
-	 * @param   Object The object to stop flickering.
-	 */
 	public static function stopFlickering(Object:FlxObject):Void
 	{
-		var boundFlicker:FlxFlicker = _boundObjects[Object];
-		if (boundFlicker != null)
-		{
-			boundFlicker.stop();
-		}
+		var effect = Object == null ? null : _boundObjects.get(Object);
+		if (effect != null)
+			effect.stop();
 	}
 
-	/**
-	 * The flickering object.
-	 */
+	public static function pauseFlickering(Object:FlxObject):Void
+	{
+		var effect = Object == null ? null : _boundObjects.get(Object);
+		if (effect != null)
+			effect.pause();
+	}
+
+	public static function resumeFlickering(Object:FlxObject):Void
+	{
+		var effect = Object == null ? null : _boundObjects.get(Object);
+		if (effect != null)
+			effect.resume();
+	}
+
+	public static function stopAll():Void
+	{
+		var effects:Array<FlxFlicker> = [];
+		for (effect in _boundObjects)
+			effects.push(effect);
+		for (effect in effects)
+			if (effect.object != null && _boundObjects.get(effect.object) == effect)
+				effect.stop();
+	}
+
+	public static function pauseAll():Void
+	{
+		for (effect in _boundObjects)
+			effect.pause();
+	}
+
+	public static function resumeAll():Void
+	{
+		for (effect in _boundObjects)
+			effect.resume();
+	}
+
 	public var object(default, null):FlxObject;
-
-	/**
-	 * The final visibility of the object after flicker is complete.
-	 */
-	public var endVisibility(default, null):Bool;
-
-	/**
-	 * The flicker timer. You can check how many seconds has passed since flickering started etc.
-	 */
+	public var endVisibility(default, null):Bool = true;
 	public var timer(default, null):FlxTimer;
-
-	/**
-	 * The callback that will be triggered after flicker has completed.
-	 */
 	public var completionCallback(default, null):FlxFlicker->Void;
-
-	/**
-	 * The callback that will be triggered every time object visiblity is changed.
-	 */
 	public var progressCallback(default, null):FlxFlicker->Void;
+	public var duration(default, null):Float = 0;
+	public var interval(default, null):Float = 0;
+	public var toggles(default, null):Int = 0;
+	public var isPaused(get, never):Bool;
+	public var isRunning(get, never):Bool;
+	public var elapsed(get, never):Float;
+	public var progress(get, never):Float;
 
-	/**
-	 * The duration of the flicker (in seconds). `0` means "forever".
-	 */
-	public var duration(default, null):Float;
+	function get_isPaused():Bool
+	{
+		return timer != null && !timer.active;
+	}
 
-	/**
-	 * The interval of the flicker.
-	 */
-	public var interval(default, null):Float;
+	function get_isRunning():Bool
+	{
+		return object != null && timer != null && _boundObjects.get(object) == this;
+	}
 
-	/**
-	 * Nullifies the references to prepare object for reuse and avoid memory leaks.
-	 */
+	function get_elapsed():Float
+	{
+		if (timer == null)
+			return 0;
+		return toggles * interval + timer.elapsedTime;
+	}
+
+	function get_progress():Float
+	{
+		return duration <= 0 ? 0 : Math.min(1, elapsed / duration);
+	}
+
 	public function destroy():Void
+	{
+		if (timer != null)
+			timer.cancel();
+		if (object != null && _boundObjects.get(object) == this)
+			_boundObjects.remove(object);
+		clear();
+	}
+
+	function clear():Void
 	{
 		object = null;
 		timer = null;
 		completionCallback = null;
 		progressCallback = null;
+		duration = 0;
+		interval = 0;
+		toggles = 0;
+		endVisibility = true;
 	}
 
-	/**
-	 * Starts flickering behavior.
-	 */
 	function start(Object:FlxObject, Duration:Float, Interval:Float, EndVisibility:Bool, ?CompletionCallback:FlxFlicker->Void,
 			?ProgressCallback:FlxFlicker->Void):Void
 	{
 		object = Object;
-		duration = Duration;
-		interval = Interval;
+		duration = Math.isNaN(Duration) || Duration < 0 ? 0 : Duration;
+		interval = Math.isNaN(Interval) || Interval <= 0 ? Math.max(FlxG.elapsed, 0.001) : Interval;
+		endVisibility = EndVisibility;
 		completionCallback = CompletionCallback;
 		progressCallback = ProgressCallback;
-		endVisibility = EndVisibility;
-		timer = new FlxTimer().start(interval, flickerProgress, Std.int(duration / interval));
+		toggles = 0;
+		var loops = duration <= 0 ? 0 : Math.max(1, Math.ceil(duration / interval));
+		timer = new FlxTimer().start(interval, flickerProgress, loops);
 	}
 
-	/**
-	 * Temporarily pause the flickering, so it can be resumed later.
-	 */
 	public function pause():Void
 	{
-		if (timer == null)
-			return;
-		
-		timer.active = false;
+		if (timer != null)
+			timer.active = false;
 	}
 
-	/**
-	 * Resume the flickering after it has been temporarily paused.
-	 */
 	public function resume():Void
 	{
-		if (timer == null)
-			return;
-		
-		timer.active = true;
+		if (timer != null)
+			timer.active = true;
 	}
 
-	/**
-	 * Prematurely ends flickering.
-	 */
 	public function stop():Void
 	{
-		timer.cancel();
-		object.visible = true;
+		if (!isRunning)
+			return;
+		var target = object;
+		if (timer != null)
+			timer.cancel();
+		target.visible = true;
 		release();
 	}
 
-	/**
-	 * Unbinds the object from flicker and releases it into pool for reuse.
-	 */
+	public function finish():Void
+	{
+		if (!isRunning)
+			return;
+		var target = object;
+		var callback = completionCallback;
+		if (timer != null)
+			timer.cancel();
+		target.visible = endVisibility;
+		if (callback != null)
+			callback(this);
+		if (object == target && _boundObjects.get(target) == this)
+			release();
+	}
+
 	function release():Void
 	{
+		if (object == null || _boundObjects.get(object) != this)
+			return;
 		_boundObjects.remove(object);
+		if (timer != null)
+			timer.cancel();
+		clear();
 		_pool.put(this);
 	}
 
-	/**
-	 * Just a helper function for flicker() to update object's visibility.
-	 */
-	function flickerProgress(timer:FlxTimer):Void
+	function flickerProgress(currentTimer:FlxTimer):Void
 	{
-		object.visible = !object.visible;
-		
+		if (timer != currentTimer || object == null || _boundObjects.get(object) != this)
+			return;
+
+		var target = object;
+		target.visible = !target.visible;
+		toggles++;
 		if (progressCallback != null)
 			progressCallback(this);
-		
-		if (timer.loops > 0 && timer.loopsLeft == 0)
-		{
-			object.visible = endVisibility;
-			if (completionCallback != null)
-				completionCallback(this);
-			
-			if (this.timer == timer)
-				release();
-		}
+
+		if (timer != currentTimer || object != target || _boundObjects.get(target) != this)
+			return;
+
+		if (currentTimer.loops > 0 && currentTimer.loopsLeft == 0)
+			finish();
 	}
 
-	/**
-	 * Internal constructor. Use static methods.
-	 */
 	@:keep
 	function new() {}
 }
